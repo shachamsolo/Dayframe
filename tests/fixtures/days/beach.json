@@ -1,0 +1,171 @@
+{
+  "assets": [
+    {
+      "uuid": "home-1",
+      "date": "2026-09-17T07:42:00+03:00",
+      "date_added": "2026-09-17T23:00:00+03:00",
+      "latitude": 32.113,
+      "longitude": 34.801,
+      "place_name": "home",
+      "uti": "public.heic",
+      "has_camera_exif": true
+    },
+    {
+      "uuid": "home-2",
+      "date": "2026-09-17T07:50:00+03:00",
+      "date_added": "2026-09-17T23:00:00+03:00",
+      "latitude": 32.113,
+      "longitude": 34.801,
+      "place_name": "home",
+      "uti": "public.heic",
+      "has_camera_exif": true
+    },
+    {
+      "uuid": "home-3",
+      "date": "2026-09-17T07:55:00+03:00",
+      "date_added": "2026-09-17T23:00:00+03:00",
+      "latitude": 32.113,
+      "longitude": 34.801,
+      "place_name": "home",
+      "uti": "public.heic",
+      "has_camera_exif": true
+    },
+    {
+      "uuid": "azrieli-1",
+      "date": "2026-09-17T09:10:00+03:00",
+      "date_added": "2026-09-17T23:00:00+03:00",
+      "latitude": 32.074,
+      "longitude": 34.792,
+      "place_name": "Azrieli Center, Tel Aviv",
+      "uti": "public.heic",
+      "has_camera_exif": true
+    },
+    {
+      "uuid": "azrieli-2",
+      "date": "2026-09-17T09:14:00+03:00",
+      "date_added": "2026-09-17T23:00:00+03:00",
+      "latitude": 32.074,
+      "longitude": 34.792,
+      "place_name": "Azrieli Center, Tel Aviv",
+      "uti": "public.heic",
+      "has_camera_exif": true
+    },
+    {
+      "uuid": "unknown-1",
+      "date": "2026-09-17T12:30:00+03:00",
+      "date_added": "2026-09-17T23:00:00+03:00",
+      "uti": "public.jpeg",
+      "has_camera_exif": true
+    },
+    {
+      "uuid": "palmachim-1",
+      "date": "2026-09-17T16:12:00+03:00",
+      "date_added": "2026-09-17T23:00:00+03:00",
+      "latitude": 31.933,
+      "longitude": 34.706,
+      "place_name": "Palmachim Beach",
+      "persons": ["Maya", "Noa"],
+      "score_overall": 0.82,
+      "uti": "public.heic",
+      "has_camera_exif": true
+    },
+    {
+      "uuid": "palmachim-2",
+      "date": "2026-09-17T16:55:00+03:00",
+      "date_added": "2026-09-17T23:00:00+03:00",
+      "latitude": 31.933,
+      "longitude": 34.706,
+      "place_name": "Palmachim Beach",
+      "persons": ["Maya"],
+      "score_overall": 0.91,
+      "uti": "public.heic",
+      "has_camera_exif": true
+    },
+    {
+      "uuid": "palmachim-3",
+      "date": "2026-09-17T18:20:00+03:00",
+      "date_added": "2026-09-17T23:00:00+03:00",
+      "latitude": 31.934,
+      "longitude": 34.705,
+      "place_name": "Palmachim Beach",
+      "uti": "public.heic",
+      "has_camera_exif": true
+    },
+    {
+      "uuid": "palmachim-4",
+      "date": "2026-09-17T19:40:00+03:00",
+      "date_added": "2026-09-17T23:00:00+03:00",
+      "latitude": 31.932,
+      "longitude": 34.707,
+      "place_name": "Palmachim Beach",
+      "persons": ["Noa"],
+      "uti": "public.heic",
+      "has_camera_exif": true
+    },
+    {
+      "uuid": "evening-1",
+      "date": "2026-09-17T20:15:00+03:00",
+      "date_added": "2026-09-17T23:00:00+03:00",
+      "latitude": 32.113,
+      "longitude": 34.801,
+      "uti": "public.heic",
+      "has_camera_exif": true
+    },
+    {
+      "uuid": "evening-2",
+      "date": "2026-09-17T20:22:00+03:00",
+      "date_added": "2026-09-17T23:00:00+03:00",
+      "latitude": 32.113,
+      "longitude": 34.801,
+      "uti": "public.heic",
+      "has_camera_exif": true
+    },
+    {
+      "uuid": "night-1",
+      "date": "2026-09-17T22:40:00+03:00",
+      "date_added": "2026-09-17T23:00:00+03:00",
+      "latitude": 32.113,
+      "longitude": 34.801,
+      "place_name": "home",
+      "uti": "public.heic",
+      "has_camera_exif": true
+    },
+    {
+      "uuid": "night-2",
+      "date": "2026-09-17T22:41:00+03:00",
+      "date_added": "2026-09-17T23:00:00+03:00",
+      "latitude": 32.113,
+      "longitude": 34.801,
+      "place_name": "home",
+      "uti": "public.heic",
+      "has_camera_exif": true
+    },
+    {
+      "uuid": "shot-1",
+      "date": "2026-09-17T11:00:00+03:00",
+      "date_added": "2026-09-17T23:00:00+03:00",
+      "screenshot": true,
+      "uti": "public.png"
+    },
+    {
+      "uuid": "shot-2",
+      "date": "2026-09-17T11:01:00+03:00",
+      "date_added": "2026-09-17T23:00:00+03:00",
+      "screenshot": true,
+      "uti": "public.png"
+    },
+    {
+      "uuid": "pdf-1",
+      "date": "2026-09-17T11:02:00+03:00",
+      "date_added": "2026-09-17T23:00:00+03:00",
+      "uti": "com.adobe.pdf"
+    },
+    {
+      "uuid": "png-1",
+      "date": "2026-09-17T11:03:00+03:00",
+      "date_added": "2026-09-17T23:00:00+03:00",
+      "uti": "public.png",
+      "has_camera_exif": false
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+[provider]
+name   = "anthropic"
+model  = "claude-sonnet-4-5"
+# API key from DAYFRAME_API_KEY env var. Never in this file.
+
+[window]
+mode     = "previous_calendar_day"   # [yesterday 00:00, today 00:00) local
+basis    = "date_added"              # not capture time — see Decisions #1
+run_at   = "07:00"
+
+[cluster]
+time_gap_minutes = 90
+geo_gap_km       = 1.5
+min_gap_for_geo_split_minutes = 20
+
+[budget]
+max_turns      = 12
+max_images     = 16
+max_cost_usd   = 0.25
+timeout_seconds = 180
+
+[privacy]
+send_coordinates = false   # send place names only
+strip_exif       = true
+max_image_px     = 1024
+
+[calendar]
+provider       = "google"
+name           = "Dayframe"      # secondary calendar, created on first run
+calendar_id    = ""              # filled in automatically after creation
+timezone       = "Asia/Jerusalem"
+approval_mode  = "auto"          # auto | review
+min_confidence = 0.7             # below this: logged locally, never written
+title_prefix   = "Dayframe: "    # set "" to drop it once the calendar is colour-coded
+language       = "en"
+# OAuth client secret path from DAYFRAME_GOOGLE_CLIENT_SECRET env var.
+# Token cached at ~/Dayframe/google_token.json — gitignore it.

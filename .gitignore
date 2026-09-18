@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+.DS_Store
+
+# Local secrets and runtime state — never commit
+google_token.json
+*.db
+.env
+.env.*
+!.env.example
