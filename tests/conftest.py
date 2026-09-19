@@ -1,3 +1,4 @@
+import warnings
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -18,6 +19,9 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "dayframe.doctor.launchd_plist_path",
         lambda: tmp_path / "com.dayframe.daily.plist",
     )
+    monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    warnings.filterwarnings("ignore", message=".*Pydantic serializer warnings.*")
     return home
 
 

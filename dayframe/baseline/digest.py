@@ -34,6 +34,30 @@ def label_clusters(clusters: list[Cluster]) -> list[LabeledCluster]:
     ]
 
 
+def build_session_digest(
+    target_date: date,
+    labeled: list[LabeledCluster],
+    *,
+    photo_count: int,
+    send_coordinates: bool = False,
+) -> str:
+    """Cheap text digest for the agent — no images, no forced submit."""
+    session_word = "session" if len(labeled) == 1 else "sessions"
+    lines = [
+        f"Yesterday: {target_date.isoformat()}. {photo_count} photos across "
+        f"{len(labeled)} candidate {session_word}.",
+        "",
+    ]
+    for item in labeled:
+        lines.append(format_digest_line(item.seq, item.cluster, send_coordinates=send_coordinates))
+    lines.append("")
+    lines.append(
+        "Cover every cluster exactly once with write_memory or discard_cluster. "
+        "Use expand_cluster before spending image budget."
+    )
+    return "\n".join(lines)
+
+
 def build_digest(
     target_date: date,
     labeled: list[LabeledCluster],

@@ -47,7 +47,50 @@ def test_run_requires_api_key() -> None:
     assert "DAYFRAME_API_KEY" in result.output
 
 
-def _fake_baseline(photos, cfg, **kwargs):
+def _fake_agent(target, cfg, **kwargs):  # noqa: ANN001
+    from datetime import date
+
+    from dayframe.agent.run import AgentResult
+    from dayframe.baseline.digest import label_clusters
+    from dayframe.baseline.models import DiscardDraft, MemoryDraft
+    from dayframe.photos.reader import FixturePhotosReader
+    from dayframe.pipeline import run_for_date
+
+    photos = run_for_date(FixturePhotosReader.from_path(BEACH), "2026-09-17")
+    labeled = label_clusters(photos.clusters)
+    return AgentResult(
+        run_id="run_2026-09-17",
+        target_date=date(2026, 9, 17),
+        labeled=labeled,
+        memories=[
+            MemoryDraft(
+                cluster_id="c004",
+                title="Sunset at Palmachim Beach",
+                body="Swimming with Maya and Noa, then ice cream at sunset.",
+                category="outing",
+                confidence=0.86,
+            )
+        ],
+        discarded=[
+            DiscardDraft(cluster_id=item.label, reason="not memorable")
+            for item in labeled
+            if item.label != "c004"
+        ],
+        skipped_unreviewed=[],
+        images_sent=3,
+        input_tokens=1200,
+        output_tokens=180,
+        cost_usd=0.0123,
+        wall_seconds=1.2,
+        turns=4,
+        model="claude-sonnet-4-5",
+        raw=photos.raw,
+        dropped=photos.dropped,
+        clusters=photos.clusters,
+    )
+
+
+def _fake_baseline(photos, cfg, **kwargs):  # noqa: ANN001
     from dayframe.baseline.digest import label_clusters
     from dayframe.baseline.models import BaselineResult, DiscardDraft, MemoryDraft
 
@@ -83,10 +126,11 @@ def test_run_dry_run_prints_and_writes_nothing(
 ) -> None:
     monkeypatch.setenv("DAYFRAME_API_KEY", "sk-test")
     monkeypatch.setenv("DAYFRAME_PHOTOS_FIXTURE", str(BEACH))
-    monkeypatch.setattr("dayframe.cli.run_baseline", _fake_baseline)
+    monkeypatch.setattr("dayframe.cli.run_agent", _fake_agent)
     result = runner.invoke(app, ["run", "--date", "2026-09-17", "--dry-run"])
     assert result.exit_code == 0, result.output
     assert "KEEP  [c004] Dayframe: Sunset at Palmachim Beach" in result.stdout
+    assert "4 turns" in result.stdout
     assert "dry-run: wrote nothing" in result.stdout
     from dayframe.store.db import connect, init_db
 
@@ -101,7 +145,7 @@ def test_run_dry_run_prints_and_writes_nothing(
 def test_run_persists_without_calendar(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DAYFRAME_API_KEY", "sk-test")
     monkeypatch.setenv("DAYFRAME_PHOTOS_FIXTURE", str(BEACH))
-    monkeypatch.setattr("dayframe.cli.run_baseline", _fake_baseline)
+    monkeypatch.setattr("dayframe.cli.run_agent", _fake_agent)
     result = runner.invoke(app, ["run", "--date", "2026-09-17", "--no-calendar"])
     assert result.exit_code == 0, result.output
     assert "Wrote run run_2026-09-17" in result.stdout
@@ -120,6 +164,40 @@ def test_run_persists_without_calendar(monkeypatch: pytest.MonkeyPatch) -> None:
         assert cluster["decision"] == "kept"
     finally:
         conn.close()
+
+
+def test_run_baseline_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DAYFRAME_API_KEY", "sk-test")
+    monkeypatch.setenv("DAYFRAME_PHOTOS_FIXTURE", str(BEACH))
+    monkeypatch.setattr("dayframe.cli.run_baseline", _fake_baseline)
+    result = runner.invoke(app, ["run", "--date", "2026-09-17", "--baseline", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "1 call" in result.stdout
+    assert "KEEP  [c004] Dayframe: Sunset at Palmachim Beach" in result.stdout
+
+
+def test_replay_missing_trace() -> None:
+    result = runner.invoke(app, ["replay", "run_missing"])
+    assert result.exit_code == 1
+    assert "no trace" in result.output
+
+
+def test_replay_prints_turns(isolated_home: Path) -> None:
+    from dayframe.agent.trace import append_jsonl, trace_path
+
+    path = trace_path("run_2026-09-17")
+    append_jsonl(
+        path,
+        {
+            "tool_calls": [{"name": "expand_cluster", "args": {"cluster_id": "c004"}}],
+            "tool_results": [{"content": "Palmachim Beach"}],
+            "usage": {"input_tokens": 10, "output_tokens": 4},
+        },
+    )
+    result = runner.invoke(app, ["replay", "run_2026-09-17"])
+    assert result.exit_code == 0, result.output
+    assert "Turn 1" in result.stdout
+    assert "expand_cluster" in result.stdout
 
 
 def test_photos_list_from_fixture(monkeypatch: pytest.MonkeyPatch) -> None:

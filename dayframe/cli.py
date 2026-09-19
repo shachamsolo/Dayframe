@@ -6,6 +6,8 @@ from datetime import datetime
 import typer
 
 from dayframe import __version__
+from dayframe.agent.run import AgentResult, run_agent
+from dayframe.agent.trace import format_replay, load_trace, trace_path
 from dayframe.baseline.anthropic import BaselineProviderError
 from dayframe.baseline.digest import format_digest_line, people_label
 from dayframe.baseline.models import BaselineResult
@@ -88,16 +90,20 @@ def run(
     no_calendar: bool = typer.Option(
         False, "--no-calendar", help="Run everything except the write."
     ),
+    baseline: bool = typer.Option(
+        False, "--baseline", help="Use the M2 single-call baseline instead of the agent."
+    ),
 ) -> None:
     """Run Dayframe for a date."""
     key = api_key()
     if not key:
         _die("DAYFRAME_API_KEY is not set; add it to .env or export it (never config.toml)")
     cfg = load_config_optional()
-    try:
-        require_anthropic(cfg)
-    except BaselineProviderError as exc:
-        _die(str(exc))
+    if baseline:
+        try:
+            require_anthropic(cfg)
+        except BaselineProviderError as exc:
+            _die(str(exc))
 
     started = datetime.now().astimezone()
     conn = init_db(connect())
@@ -108,46 +114,68 @@ def run(
             _die(str(exc))
         run_id = f"run_{day.isoformat()}"
         seen = seen_uuids(conn, exclude_run_id=run_id)
+        if baseline:
+            _run_baseline_cli(
+                date=date,
+                dry_run=dry_run,
+                no_calendar=no_calendar,
+                key=key,
+                cfg=cfg,
+                conn=conn,
+                started=started,
+                seen=seen,
+            )
+            return
         try:
-            photos = run_for_date(get_reader(), date, cfg=cfg, seen=seen)
+            result = run_agent(target=date, cfg=cfg, reader=get_reader(), seen=seen, api_key=key)
         except (FileNotFoundError, PermissionError, RuntimeError, OSError, ValueError) as exc:
             _die(str(exc))
-
-        _print_pipeline_summary(photos)
-        if not photos.clusters:
+        finished = datetime.now().astimezone()
+        if result.resumed:
+            typer.echo(f"Resumed {result.run_id} from checkpoint.")
+        _print_pipeline_summary(result)
+        if not result.clusters:
             typer.echo("Nothing to send.")
             return
-
-        try:
-            baseline = run_baseline(photos, cfg, api_key=key)
-        except BaselineProviderError as exc:
-            _die(str(exc))
-        finished = datetime.now().astimezone()
-        _print_baseline(baseline, title_prefix=cfg.calendar.title_prefix)
-
+        _print_memories(
+            result,
+            title_prefix=cfg.calendar.title_prefix,
+            images_sent=result.images_sent,
+            wall_seconds=result.wall_seconds,
+            cost_usd=result.cost_usd,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            call_label=f"{result.turns} turn" if result.turns == 1 else f"{result.turns} turns",
+        )
+        if result.trace_path:
+            typer.echo(f"Trace {result.trace_path}")
         if dry_run:
             typer.echo("dry-run: wrote nothing")
             return
-
+        if result.interrupted:
+            typer.echo("review: stopped before calendar write; nothing persisted")
+            return
         persist_baseline_run(
             conn,
-            run_id=photos.run_id,
-            target_date=photos.target_date.isoformat(),
+            run_id=result.run_id,
+            target_date=result.target_date.isoformat(),
             started_at=started,
             finished_at=finished,
-            labeled=baseline.labeled,
-            memories=baseline.memories,
-            discarded=baseline.discarded,
-            assets=photos.raw,
+            labeled=result.labeled,
+            memories=result.memories,
+            discarded=result.discarded,
+            assets=result.raw,
             provider=cfg.provider.name,
-            model=baseline.model,
-            prompt_version=baseline.prompt_version,
-            images_sent=baseline.images_sent,
-            input_tokens=baseline.input_tokens,
-            output_tokens=baseline.output_tokens,
-            cost_usd=baseline.cost_usd,
+            model=result.model,
+            prompt_version=result.prompt_version,
+            images_sent=result.images_sent,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            cost_usd=result.cost_usd,
+            status=result.status,
+            turns=result.turns,
         )
-        typer.echo(f"Wrote run {photos.run_id} to the local ledger.")
+        typer.echo(f"Wrote run {result.run_id} to the local ledger.")
         if not no_calendar:
             typer.echo("calendar write not implemented until M4")
     finally:
@@ -163,8 +191,10 @@ def install_agent() -> None:
 @app.command()
 def replay(run_id: str) -> None:
     """Walk a JSONL trace in human-readable form."""
-    del run_id
-    _not_yet("M3")
+    path = trace_path(run_id)
+    if not path.is_file():
+        _die(f"no trace for {run_id} at {path}")
+    typer.echo(format_replay(load_trace(path), run_id=run_id), nl=False)
 
 
 @app.command()
@@ -210,7 +240,67 @@ def _die(message: str) -> None:
     raise typer.Exit(code=1)
 
 
-def _print_pipeline_summary(result: PipelineResult) -> None:
+def _run_baseline_cli(
+    *,
+    date: str,
+    dry_run: bool,
+    no_calendar: bool,
+    key: str,
+    cfg,
+    conn,
+    started,
+    seen: set[str],
+) -> None:
+    try:
+        photos = run_for_date(get_reader(), date, cfg=cfg, seen=seen)
+    except (FileNotFoundError, PermissionError, RuntimeError, OSError, ValueError) as exc:
+        _die(str(exc))
+    _print_pipeline_summary(photos)
+    if not photos.clusters:
+        typer.echo("Nothing to send.")
+        return
+    try:
+        baseline = run_baseline(photos, cfg, api_key=key)
+    except BaselineProviderError as exc:
+        _die(str(exc))
+    finished = datetime.now().astimezone()
+    _print_memories(
+        baseline,
+        title_prefix=cfg.calendar.title_prefix,
+        images_sent=baseline.images_sent,
+        wall_seconds=baseline.wall_seconds,
+        cost_usd=baseline.cost_usd,
+        input_tokens=baseline.input_tokens,
+        output_tokens=baseline.output_tokens,
+        call_label="1 call",
+    )
+    if dry_run:
+        typer.echo("dry-run: wrote nothing")
+        return
+    persist_baseline_run(
+        conn,
+        run_id=photos.run_id,
+        target_date=photos.target_date.isoformat(),
+        started_at=started,
+        finished_at=finished,
+        labeled=baseline.labeled,
+        memories=baseline.memories,
+        discarded=baseline.discarded,
+        assets=photos.raw,
+        provider=cfg.provider.name,
+        model=baseline.model,
+        prompt_version=baseline.prompt_version,
+        images_sent=baseline.images_sent,
+        input_tokens=baseline.input_tokens,
+        output_tokens=baseline.output_tokens,
+        cost_usd=baseline.cost_usd,
+    )
+    typer.echo(f"Wrote run {photos.run_id} to the local ledger.")
+    if not no_calendar:
+        typer.echo("calendar write not implemented until M4")
+
+
+def _print_pipeline_summary(result: PipelineResult | AgentResult) -> None:
     drop_counts = Counter(item.reason for item in result.dropped)
     session_word = "session" if len(result.clusters) == 1 else "sessions"
     typer.echo(
@@ -231,24 +321,34 @@ def _print_pipeline_summary(result: PipelineResult) -> None:
         typer.echo(format_digest_line(index, cluster))
 
 
-def _print_baseline(baseline: BaselineResult, *, title_prefix: str) -> None:
+def _print_memories(
+    result: BaselineResult | AgentResult,
+    *,
+    title_prefix: str,
+    images_sent: int,
+    wall_seconds: float,
+    cost_usd: float,
+    input_tokens: int,
+    output_tokens: int,
+    call_label: str,
+) -> None:
     typer.echo("")
     typer.echo(
-        f"Sent {baseline.images_sent} images in 1 call. "
-        f"{baseline.wall_seconds:.1f}s  ${baseline.cost_usd:.4f}  "
-        f"{baseline.input_tokens} in / {baseline.output_tokens} out"
+        f"Sent {images_sent} images in {call_label}. "
+        f"{wall_seconds:.1f}s  ${cost_usd:.4f}  "
+        f"{input_tokens} in / {output_tokens} out"
     )
-    if baseline.memories:
+    if result.memories:
         typer.echo("")
-        for memory in baseline.memories:
+        for memory in result.memories:
             title = f"{title_prefix}{memory.title}" if title_prefix else memory.title
             typer.echo(
                 f"KEEP  [{memory.cluster_id}] {title}  ({memory.confidence:.2f}, {memory.category})"
             )
             typer.echo(f"      {memory.body}")
-    if baseline.discarded:
+    if result.discarded:
         typer.echo("")
-        for discard in baseline.discarded:
+        for discard in result.discarded:
             typer.echo(f"SKIP  [{discard.cluster_id}]  {discard.reason}")
 
 

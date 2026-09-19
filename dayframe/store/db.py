@@ -150,6 +150,7 @@ def persist_baseline_run(
     output_tokens: int,
     cost_usd: float,
     status: str = "ok",
+    turns: int = 1,
 ) -> None:
     cluster_ids = [item.cluster.id for item in labeled]
     delete_run(conn, run_id)
@@ -165,7 +166,7 @@ def persist_baseline_run(
         INSERT INTO runs (
             id, target_date, started_at, finished_at, status, turns, images_sent,
             input_tokens, output_tokens, cost_usd, provider, model, prompt_version
-        ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run_id,
@@ -173,6 +174,7 @@ def persist_baseline_run(
             started_at.isoformat(),
             finished_at.isoformat(),
             status,
+            turns,
             images_sent,
             input_tokens,
             output_tokens,
