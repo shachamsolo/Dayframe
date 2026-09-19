@@ -15,6 +15,9 @@ dependencies = [
     "langchain-anthropic>=0.3",
     "langgraph>=0.4",
     "langgraph-checkpoint-sqlite>=2.0",
+    "google-api-python-client>=2.150",
+    "google-auth-oauthlib>=1.2",
+    "tenacity>=8.2,<9.0",
 ]
 
 [project.optional-dependencies]

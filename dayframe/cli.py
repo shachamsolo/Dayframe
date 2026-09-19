@@ -10,8 +10,11 @@ from dayframe.agent.run import AgentResult, run_agent
 from dayframe.agent.trace import format_replay, load_trace, trace_path
 from dayframe.baseline.anthropic import BaselineProviderError
 from dayframe.baseline.digest import format_digest_line, people_label
-from dayframe.baseline.models import BaselineResult
+from dayframe.baseline.models import BaselineResult, LabeledCluster, MemoryDraft
 from dayframe.baseline.run import require_anthropic, run_baseline
+from dayframe.calendar.auth import run_auth
+from dayframe.calendar.events import CalendarError
+from dayframe.calendar.write import publish_memories, undo_run
 from dayframe.doctor import failed, format_report, run_checks
 from dayframe.paths import api_key, load_env
 from dayframe.photos.models import Asset
@@ -25,6 +28,7 @@ from dayframe.store.db import (
     persist_baseline_run,
     replace_inspect_run,
     seen_uuids,
+    set_memory_event_id,
 )
 from dayframe.window import calendar_day_window, parse_since, parse_target_date, since_window
 
@@ -80,7 +84,11 @@ def doctor() -> None:
 @app.command()
 def auth() -> None:
     """One-time Google OAuth consent flow."""
-    _not_yet("M4")
+    try:
+        path = run_auth()
+    except CalendarError as exc:
+        _die(str(exc))
+    typer.echo(f"Saved token to {path} (mode 0600).")
 
 
 @app.command()
@@ -177,7 +185,13 @@ def run(
         )
         typer.echo(f"Wrote run {result.run_id} to the local ledger.")
         if not no_calendar:
-            typer.echo("calendar write not implemented until M4")
+            _publish_calendar(
+                conn,
+                run_id=result.run_id,
+                labeled=result.labeled,
+                memories=result.memories,
+                cfg=cfg,
+            )
     finally:
         conn.close()
 
@@ -200,8 +214,22 @@ def replay(run_id: str) -> None:
 @app.command()
 def undo(run_id: str) -> None:
     """Delete calendar events written by a run."""
-    del run_id
-    _not_yet("M4")
+    cfg = load_config_optional()
+    try:
+        result = undo_run(run_id, cfg)
+    except CalendarError as exc:
+        _die(str(exc))
+    bits: list[str] = []
+    if result.google_deleted:
+        event_word = "event" if result.google_deleted == 1 else "events"
+        bits.append(f"deleted {result.google_deleted} Google {event_word}")
+    if result.ics_deleted:
+        bits.append("removed .ics")
+    if result.local_deleted:
+        bits.append("removed the local ledger")
+    typer.echo(f"undo {run_id}: {', '.join(bits)}.")
+    for warning in result.warnings:
+        typer.echo(f"warning: {warning}", err=True)
 
 
 def _fmt_dt(value: datetime) -> str:
@@ -297,7 +325,46 @@ def _run_baseline_cli(
     )
     typer.echo(f"Wrote run {photos.run_id} to the local ledger.")
     if not no_calendar:
-        typer.echo("calendar write not implemented until M4")
+        _publish_calendar(
+            conn,
+            run_id=photos.run_id,
+            labeled=baseline.labeled,
+            memories=baseline.memories,
+            cfg=cfg,
+        )
+
+
+def _publish_calendar(
+    conn,
+    *,
+    run_id: str,
+    labeled: list[LabeledCluster],
+    memories: list[MemoryDraft],
+    cfg,
+) -> None:
+    if not memories:
+        return
+
+    def _saved(cluster_id: str, event_id: str) -> None:
+        set_memory_event_id(conn, cluster_id, event_id)
+        conn.commit()
+
+    try:
+        published = publish_memories(
+            memories,
+            labeled,
+            cfg,
+            run_id,
+            on_published=_saved,
+        )
+    except CalendarError as exc:
+        _die(str(exc))
+    n = len(published.events)
+    event_word = "event" if n == 1 else "events"
+    if published.backend == "google":
+        typer.echo(f"Wrote {n} {event_word} to Google Calendar ({cfg.calendar.name}).")
+        return
+    typer.echo(f"Google auth unavailable; wrote {published.ics_path}")
 
 
 def _print_pipeline_summary(result: PipelineResult | AgentResult) -> None:

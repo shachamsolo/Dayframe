@@ -252,3 +252,22 @@ def fetch_clusters(conn: sqlite3.Connection, run_id: str) -> list[sqlite3.Row]:
         "SELECT * FROM clusters WHERE run_id = ? ORDER BY start_ts, id",
         (run_id,),
     ).fetchall()
+
+
+def fetch_memories(conn: sqlite3.Connection, run_id: str) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT m.* FROM memories m
+        JOIN clusters c ON c.id = m.cluster_id
+        WHERE c.run_id = ?
+        ORDER BY m.created_at, m.id
+        """,
+        (run_id,),
+    ).fetchall()
+
+
+def set_memory_event_id(conn: sqlite3.Connection, cluster_id: str, event_id: str) -> None:
+    conn.execute(
+        "UPDATE memories SET event_id = ? WHERE cluster_id = ?",
+        (event_id, cluster_id),
+    )

@@ -166,6 +166,63 @@ def test_run_persists_without_calendar(monkeypatch: pytest.MonkeyPatch) -> None:
         conn.close()
 
 
+def test_run_writes_ics_without_google_auth(
+    monkeypatch: pytest.MonkeyPatch, isolated_home: Path
+) -> None:
+    monkeypatch.setenv("DAYFRAME_API_KEY", "sk-test")
+    monkeypatch.setenv("DAYFRAME_PHOTOS_FIXTURE", str(BEACH))
+    monkeypatch.setattr("dayframe.cli.run_agent", _fake_agent)
+    result = runner.invoke(app, ["run", "--date", "2026-09-17"])
+    assert result.exit_code == 0, result.output
+    ics = isolated_home / "out" / "run_2026-09-17.ics"
+    assert "Google auth unavailable" in result.stdout
+    assert str(ics) in result.stdout
+    assert ics.is_file()
+    text = ics.read_text(encoding="utf-8")
+    assert "Dayframe: Sunset at Palmachim Beach" in text
+    assert "TRANSP:TRANSPARENT" in text
+    from dayframe.store.db import connect, init_db
+
+    conn = init_db(connect())
+    try:
+        row = conn.execute("SELECT event_id FROM memories").fetchone()
+        assert row["event_id"]
+    finally:
+        conn.close()
+
+
+def test_undo_removes_ics_and_ledger(monkeypatch: pytest.MonkeyPatch, isolated_home: Path) -> None:
+    monkeypatch.setenv("DAYFRAME_API_KEY", "sk-test")
+    monkeypatch.setenv("DAYFRAME_PHOTOS_FIXTURE", str(BEACH))
+    monkeypatch.setattr("dayframe.cli.run_agent", _fake_agent)
+    written = runner.invoke(app, ["run", "--date", "2026-09-17"])
+    assert written.exit_code == 0, written.output
+    result = runner.invoke(app, ["undo", "run_2026-09-17"])
+    assert result.exit_code == 0, result.output
+    assert "removed .ics" in result.stdout
+    assert "removed the local ledger" in result.stdout
+    assert not (isolated_home / "out" / "run_2026-09-17.ics").exists()
+    from dayframe.store.db import connect, fetch_run, init_db
+
+    conn = init_db(connect())
+    try:
+        assert fetch_run(conn, "run_2026-09-17") is None
+    finally:
+        conn.close()
+
+
+def test_undo_missing_run() -> None:
+    result = runner.invoke(app, ["undo", "run_missing"])
+    assert result.exit_code == 1
+    assert "no run" in result.output
+
+
+def test_auth_requires_secret() -> None:
+    result = runner.invoke(app, ["auth"])
+    assert result.exit_code == 1
+    assert "DAYFRAME_GOOGLE_CLIENT_SECRET" in result.output
+
+
 def test_run_baseline_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DAYFRAME_API_KEY", "sk-test")
     monkeypatch.setenv("DAYFRAME_PHOTOS_FIXTURE", str(BEACH))

@@ -27,6 +27,7 @@ One entry per experience. Not per photo. No gallery, no journaling prompt, no iO
 - [Configuration](#configuration)
 - [CLI](#cli)
 - [Permissions](#permissions-the-annoying-part)
+- [Google Calendar credentials (M4)](#google-calendar-credentials-m4)
 - [Milestones](#milestones)
 - [Evaluation](#evaluation)
 - [Non-goals](#non-goals)
@@ -203,7 +204,7 @@ Request the narrowest scope that works:
 https://www.googleapis.com/auth/calendar.app.created
 ```
 
-This grants access **only to calendars the app itself created** — Dayframe literally cannot read or modify your existing calendars. Verify it covers `calendars().insert()` in the current docs; if not, fall back to `calendar.events` plus a manually created calendar whose ID you paste into config.
+This grants access **only to calendars the app itself created** — Dayframe literally cannot read or modify your existing calendars. It covers `calendars().insert()` and event writes on that calendar. It does **not** cover `calendarList().list()`, so Dayframe looks up a stored `calendar_id` (or creates the calendar) instead of listing yours. If `calendars().insert()` later 403s on that scope, fall back to `calendar.events` plus a manually created calendar whose ID you paste into config.
 
 **Deterministic event IDs — free idempotency.** Google lets you supply the event ID on insert. Valid IDs are base32hex (`0-9`, `a-v`), so a SHA-1 hex digest is directly usable:
 
@@ -635,12 +636,121 @@ dayframe install-agent                 # write the launchd plist
 Budget real time for this. It's the most common place this kind of project dies.
 
 1. **Full Disk Access** — required to read the Photos library. Granted to the *executable*, not the project. For development that's Terminal.app or iTerm. For the launchd agent it's whatever binary launchd invokes, which is often a different Python than the one in your shell.
-2. **Google Calendar OAuth** — no macOS TCC involvement at all, which is the main reason Google is easier here. Create a Google Cloud project, enable the Calendar API, create an OAuth client of type **Desktop app**, and run `dayframe auth` once interactively.
-
-   ⚠️ **The one that will bite you on day 8:** while your OAuth app's publishing status is **Testing**, Google expires refresh tokens after **7 days**. Your daily job will run beautifully for a week and then start failing silently. Set the app to **In production** in the OAuth consent screen before installing the launchd agent. For a personal single-user app you'll see an "unverified app" warning during consent — that's expected and safe to accept for your own account.
+2. **Google Calendar OAuth** — no macOS TCC involvement at all, which is the main reason Google is easier here. Follow [Google Calendar credentials (M4)](#google-calendar-credentials-m4): Cloud project, Calendar API, OAuth **Desktop app** client JSON, then `dayframe auth` once interactively.
 3. **launchd** — `~/Library/LaunchAgents/com.dayframe.daily.plist` with `StartCalendarInterval`. Use `RunAtLoad = false` and always redirect stdout/stderr to a log file; a silently failing launchd job is indistinguishable from a working one.
 
 `dayframe doctor` should check all three and print an exact remediation step for each failure. Write it early — you'll run it a hundred times.
+
+---
+
+## Google Calendar credentials (M4)
+
+Dayframe does **not** use a Google Cloud API key. Calendar writes need a signed-in user, so auth is **OAuth 2.0 for a Desktop app**. What you download is a client JSON (`client_id` + `client_secret`). `dayframe auth` then opens a browser, you consent, and a refresh token is cached at `~/Dayframe/google_token.json`. After that the daily job runs unattended.
+
+If you create a key on **APIs & Services → Credentials → API keys**, it will not work. Ignore that page.
+
+### 1. Create a Cloud project
+
+1. Open [Google Cloud Console](https://console.cloud.google.com/) signed in as the Google account whose calendar you want.
+2. Project picker (top bar) → **New project**.
+3. Name it `Dayframe`. Create it, then select it.
+
+### 2. Enable the Calendar API
+
+1. [Enable Google Calendar API](https://console.cloud.google.com/apis/library/calendar-json.googleapis.com) for that project.
+2. Confirm it says **API enabled**.
+
+### 3. Configure the OAuth consent screen
+
+Google Auth Platform has to exist before you can create a client.
+
+1. Open [Google Auth Platform → Branding](https://console.cloud.google.com/auth/branding). If it says not configured, click **Get started**.
+2. **App name:** `Dayframe`
+3. **User support email / developer contact:** your Gmail.
+4. **Audience:** **External** (unless this is a Google Workspace org-internal app).
+5. Accept the User Data Policy and create.
+
+Then:
+
+1. [Audience](https://console.cloud.google.com/auth/audience) → **Add users** → add the same Gmail. While the app is in **Testing**, only listed test users can consent.
+2. [Data Access](https://console.cloud.google.com/auth/scopes) → **Add or remove scopes**. Under *Manually add scopes*, paste:
+
+```
+https://www.googleapis.com/auth/calendar.app.created
+```
+
+That scope only covers calendars **this app created**. Dayframe cannot read or change your primary calendar. If `calendars().insert()` later 403s on that scope, fall back to `https://www.googleapis.com/auth/calendar.events` and paste a manually created calendar ID into `config.toml` (`[calendar].calendar_id`).
+
+Do **not** request `calendar` (full access) or `calendar.readonly`.
+
+### 4. Create a Desktop OAuth client
+
+1. Open [Google Auth Platform → Clients](https://console.cloud.google.com/auth/clients) → **Create client**.
+2. **Application type:** **Desktop app** (not Web, not iOS, not API key).
+3. **Name:** `Dayframe local`
+4. **Create**. Download the JSON **immediately** — Google only shows the client secret at creation time.
+
+The file looks like this (`installed` is the desktop-app marker):
+
+```json
+{
+  "installed": {
+    "client_id": "….apps.googleusercontent.com",
+    "project_id": "dayframe-…",
+    "client_secret": "GOCSPX-…",
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "redirect_uris": ["http://localhost"]
+  }
+}
+```
+
+Store it **outside the repo**, e.g. `~/Dayframe/google_client_secret.json`, mode `0600`. Never commit it. Never put it in `config.toml`.
+
+### 5. Point Dayframe at the JSON
+
+In the project `.env` (or `~/Dayframe/.env`):
+
+```bash
+DAYFRAME_GOOGLE_CLIENT_SECRET=/Users/you/Dayframe/google_client_secret.json
+```
+
+Then:
+
+```bash
+dayframe doctor    # google_calendar should complain only about the missing token
+dayframe auth      # browser consent; writes ~/Dayframe/google_token.json (0600)
+dayframe doctor    # google_calendar PASS
+```
+
+Consent as the same account you added as a test user. Google will show an **unverified app** warning — **Advanced → Go to Dayframe (unsafe)** is expected for a personal single-user app.
+
+If the page says **400 … request because it is malformed**:
+
+1. Ctrl+C `dayframe auth` and run it again after pulling the latest `dayframe/calendar/auth.py` (redirect is `127.0.0.1`, not `localhost`).
+2. Open the URL in **Chrome or Safari**, not Cursor's Simple Browser. Do not click the terminal hyperlink — `&` truncates it. Copy the whole URL.
+3. Confirm [Data Access](https://console.cloud.google.com/auth/scopes) includes `https://www.googleapis.com/auth/calendar.app.created` and [Audience](https://console.cloud.google.com/auth/audience) lists your Gmail as a test user.
+4. Try an incognito window (extensions can 400 Google's accounts page).
+
+### 6. Publish before launchd (or tokens die on day 8)
+
+While publishing status is **Testing**, Google expires refresh tokens after **7 days**. The daily job will look fine for a week, then fail silently.
+
+Before `dayframe install-agent`: [Audience](https://console.cloud.google.com/auth/audience) → **Publish app** / **In production**. You will still see the unverified-app warning on consent; that is fine for your own account. Skip Google's verification process — you are not distributing this.
+
+If auth later fails with `invalid_grant`, delete `~/Dayframe/google_token.json` and run `dayframe auth` again.
+
+### Checklist
+
+| Piece | Where it lives |
+|---|---|
+| Calendar API enabled | Cloud project |
+| OAuth **Desktop** client JSON | `DAYFRAME_GOOGLE_CLIENT_SECRET` |
+| Refresh token | `~/Dayframe/google_token.json` (created by `dayframe auth`) |
+| Secondary calendar name | `config.toml` `[calendar].name` = `"Dayframe"` |
+| Calendar ID | filled in on first successful write |
+
+**Done when:** `dayframe doctor` reports `google_calendar` PASS, and a test event shows up on your phone under a calendar named Dayframe — not on your primary calendar.
 
 ---
 
@@ -668,7 +778,7 @@ LangGraph `StateGraph`, `agent ⇄ ToolNode` cycle, the four tools, budgets enfo
 **Concept:** tool calling, the agent cycle, context budgeting, progressive disclosure, checkpointed state.
 
 ### M4 — Calendar write (1 day)
-`dayframe auth`, Google Calendar client, secondary-calendar creation, deterministic event IDs, retry/backoff, `.ics` fallback, `dayframe undo`.
+First: [get Google Calendar credentials](#google-calendar-credentials-m4). Then: `dayframe auth`, Google Calendar client, secondary-calendar creation, deterministic event IDs, retry/backoff, `.ics` fallback, `dayframe undo`.
 **Done when:** yesterday appears in Google Calendar on your phone, running the same day **twice** produces no duplicates, and `undo` removes the run completely.
 **Concept:** side effects across a network boundary — idempotency, reversibility, partial-failure recovery.
 
