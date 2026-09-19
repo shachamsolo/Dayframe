@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS runs (
   target_date   TEXT NOT NULL,
   started_at    TEXT NOT NULL,
   finished_at   TEXT,
-  status        TEXT NOT NULL,      -- running|ok|failed|budget_exceeded
+  status        TEXT NOT NULL,      -- running|ok|failed|budget_exceeded|pending_review
   turns         INTEGER,
   images_sent   INTEGER,
   input_tokens  INTEGER,
@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS runs (
   cost_usd      REAL,
   provider      TEXT,
   model         TEXT,
-  prompt_version TEXT
+  prompt_version TEXT,
+  error         TEXT
 );
 
 CREATE TABLE IF NOT EXISTS assets_seen (

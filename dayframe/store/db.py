@@ -28,12 +28,19 @@ def init_db(conn: sqlite3.Connection | None = None) -> sqlite3.Connection:
     db = conn or connect()
     try:
         db.executescript(_SCHEMA)
+        _migrate(db)
         db.commit()
     except Exception:
         if own:
             db.close()
         raise
     return db
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+    if "error" not in columns:
+        conn.execute("ALTER TABLE runs ADD COLUMN error TEXT")
 
 
 def ensure_home() -> Path:
@@ -165,8 +172,9 @@ def persist_baseline_run(
         """
         INSERT INTO runs (
             id, target_date, started_at, finished_at, status, turns, images_sent,
-            input_tokens, output_tokens, cost_usd, provider, model, prompt_version
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            input_tokens, output_tokens, cost_usd, provider, model, prompt_version,
+            error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run_id,
@@ -182,6 +190,7 @@ def persist_baseline_run(
             provider,
             model,
             prompt_version,
+            None,
         ),
     )
     by_label = {item.label: item.cluster for item in labeled}
@@ -271,3 +280,34 @@ def set_memory_event_id(conn: sqlite3.Connection, cluster_id: str, event_id: str
         "UPDATE memories SET event_id = ? WHERE cluster_id = ?",
         (event_id, cluster_id),
     )
+
+
+def record_failed_run(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    target_date: str,
+    started_at: datetime,
+    finished_at: datetime,
+    error: str,
+    provider: str,
+    model: str,
+) -> None:
+    delete_run(conn, run_id)
+    conn.execute(
+        """
+        INSERT INTO runs (
+            id, target_date, started_at, finished_at, status, provider, model, error
+        ) VALUES (?, ?, ?, ?, 'failed', ?, ?, ?)
+        """,
+        (
+            run_id,
+            target_date,
+            started_at.isoformat(),
+            finished_at.isoformat(),
+            provider,
+            model,
+            error[:2000],
+        ),
+    )
+    conn.commit()

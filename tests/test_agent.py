@@ -14,7 +14,7 @@ from dayframe.agent.run import open_checkpointer, run_agent
 from dayframe.agent.tools import expand_text, view_content
 from dayframe.agent.trace import RawDump, format_replay, load_trace, redact_content, trace_path
 from dayframe.baseline.digest import build_session_digest, label_clusters
-from dayframe.config import Config
+from dayframe.config import CalendarConfig, Config
 from dayframe.photos.reader import FixturePhotosReader
 from dayframe.pipeline import run_for_date
 
@@ -244,6 +244,58 @@ def test_resume_skips_completed_nodes(isolated_home: Path) -> None:
         assert result.turns >= 2
     finally:
         conn.close()
+
+
+def test_review_mode_interrupts_until_resume() -> None:
+    cfg = Config(calendar=CalendarConfig(approval_mode="review"))
+    saver = InMemorySaver()
+    model = ScriptedModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[_tc("expand_cluster", {"cluster_id": "c004"}, "e1")],
+            ),
+            AIMessage(content="", tool_calls=_keep_and_skip()),
+            AIMessage(content="done"),
+        ]
+    )
+    first = run_agent(
+        target="2026-09-17",
+        cfg=cfg,
+        reader=FixturePhotosReader.from_path(BEACH),
+        model=model,
+        checkpointer=saver,
+        dump_wire=False,
+    )
+    assert first.interrupted is True
+    assert first.status == "pending_review"
+    assert first.memories[0].title == "Sunset at Palmachim Beach"
+    calls = model.calls
+
+    parked = run_agent(
+        target="2026-09-17",
+        cfg=cfg,
+        reader=FixturePhotosReader.from_path(BEACH),
+        model=model,
+        checkpointer=saver,
+        dump_wire=False,
+    )
+    assert parked.interrupted is True
+    assert parked.resumed is True
+    assert model.calls == calls
+
+    done = run_agent(
+        target="2026-09-17",
+        cfg=cfg,
+        reader=FixturePhotosReader.from_path(BEACH),
+        model=model,
+        checkpointer=saver,
+        dump_wire=False,
+        resume=True,
+    )
+    assert done.interrupted is False
+    assert done.status == "ok"
+    assert done.memories[0].title == "Sunset at Palmachim Beach"
 
 
 def test_raw_dump_redacts_images(tmp_path: Path) -> None:

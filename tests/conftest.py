@@ -15,9 +15,11 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.delenv("DAYFRAME_GOOGLE_CLIENT_SECRET", raising=False)
     monkeypatch.delenv("DAYFRAME_PHOTOS_FIXTURE", raising=False)
     monkeypatch.setenv("DAYFRAME_SKIP_DOTENV", "1")
+    plist = tmp_path / "LaunchAgents" / "com.dayframe.daily.plist"
+    monkeypatch.setattr("dayframe.paths.launchd_plist_path", lambda: plist)
     monkeypatch.setattr(
         "dayframe.doctor.launchd_plist_path",
-        lambda: tmp_path / "com.dayframe.daily.plist",
+        lambda: plist,
     )
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
     monkeypatch.setenv("LANGSMITH_TRACING", "false")

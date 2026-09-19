@@ -11,6 +11,7 @@ ENV_GOOGLE_CLIENT_SECRET = "DAYFRAME_GOOGLE_CLIENT_SECRET"
 ENV_PHOTOS_LIBRARY = "DAYFRAME_PHOTOS_LIBRARY"
 ENV_PHOTOS_FIXTURE = "DAYFRAME_PHOTOS_FIXTURE"
 ENV_SKIP_DOTENV = "DAYFRAME_SKIP_DOTENV"
+ENV_UNATTENDED = "DAYFRAME_UNATTENDED"
 
 LAUNCHD_LABEL = "com.dayframe.daily"
 DEFAULT_PHOTOS_LIBRARY = Path.home() / "Pictures" / "Photos Library.photoslibrary"
@@ -62,8 +63,17 @@ def out_dir() -> Path:
     return home() / "out"
 
 
+def logs_dir() -> Path:
+    return home() / "logs"
+
+
 def launchd_plist_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
+
+
+def is_unattended() -> bool:
+    value = os.environ.get(ENV_UNATTENDED, "").strip().lower()
+    return value in {"1", "true", "yes"}
 
 
 def photos_library_path() -> Path:

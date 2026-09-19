@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pydantic import ValidationError
 
 from dayframe.config import Config
+from dayframe.launchd import plist_is_valid
 from dayframe.paths import (
     api_key,
     config_path,
@@ -130,6 +131,14 @@ def check_launchd() -> Check:
             name="launchd",
             ok=False,
             detail=f"{plist} is not installed",
+            fix="run: dayframe install-agent",
+        )
+    problem = plist_is_valid(plist)
+    if problem:
+        return Check(
+            name="launchd",
+            ok=False,
+            detail=f"{plist} is invalid: {problem}",
             fix="run: dayframe install-agent",
         )
     return Check(name="launchd", ok=True, detail=str(plist))

@@ -111,6 +111,12 @@ def run_config(run_id: str, cfg: Config, *, callbacks: list[Any] | None = None) 
     return config
 
 
+def awaiting_approval(next_nodes: Any, approval_mode: str) -> bool:
+    if approval_mode != "review" or not next_nodes:
+        return False
+    return "write_calendar" in next_nodes
+
+
 def run_agent(
     *,
     target: str,
@@ -122,6 +128,7 @@ def run_agent(
     checkpointer: Any | None = None,
     dump_wire: bool = True,
     now: Any | None = None,
+    resume: bool = False,
 ) -> AgentResult:
     day = parse_target_date(target, now=now)
     run_id = inspect_run_id(day)
@@ -147,6 +154,7 @@ def run_agent(
             seen=seen,
             saver=saver,
             dump_wire=dump_wire,
+            resume=resume,
         )
     finally:
         if own_conn is not None:
@@ -164,6 +172,7 @@ def _run(
     seen: set[str] | None,
     saver: Any,
     dump_wire: bool,
+    resume: bool,
 ) -> AgentResult:
     ensure_traces_dir()
     config = run_config(run_id, cfg)
@@ -177,6 +186,21 @@ def _run(
         resumed = False
 
     jsonl = trace_path(run_id)
+    started = time.perf_counter()
+    if awaiting_approval(snapshot.next, cfg.calendar.approval_mode) and not resume:
+        return _result_from_values(
+            run_id=run_id,
+            day=day,
+            model_name=model_name,
+            cfg=cfg,
+            values=snapshot.values or {},
+            interrupted=True,
+            resumed=True,
+            status="pending_review",
+            wall_seconds=time.perf_counter() - started,
+            jsonl=jsonl,
+        )
+
     raw_path = wire_path(run_id)
     if not resumed:
         if jsonl.exists():
@@ -205,7 +229,6 @@ def _run(
     )
     payload = None if resumed else initial_state(run_id, day, seen)
     buffer = _TurnBuffer()
-    started = time.perf_counter()
     status = "ok"
     try:
         for update in graph.stream(payload, config, context=context, stream_mode="updates"):
@@ -219,9 +242,37 @@ def _run(
     final = graph.get_state(config)
     values = final.values or {}
     interrupted = bool(final.next)
-    if status == "ok" and values.get("status"):
+    if interrupted and awaiting_approval(final.next, cfg.calendar.approval_mode):
+        status = "pending_review"
+    elif status == "ok" and values.get("status"):
         status = str(values["status"])
+    return _result_from_values(
+        run_id=run_id,
+        day=day,
+        model_name=model_name,
+        cfg=cfg,
+        values=values,
+        interrupted=interrupted,
+        resumed=resumed,
+        status=status,
+        wall_seconds=time.perf_counter() - started,
+        jsonl=jsonl,
+    )
 
+
+def _result_from_values(
+    *,
+    run_id: str,
+    day: date,
+    model_name: str,
+    cfg: Config,
+    values: dict[str, Any],
+    interrupted: bool,
+    resumed: bool,
+    status: str,
+    wall_seconds: float,
+    jsonl: Path,
+) -> AgentResult:
     labeled = labeled_from_state(values) if values.get("clusters") else label_clusters([])
     memories = [MemoryDraft.model_validate(item) for item in values.get("memories") or []]
     discards = [DiscardDraft.model_validate(item) for item in values.get("discarded") or []]
@@ -249,7 +300,7 @@ def _run(
         input_tokens=int(values.get("input_tokens") or 0),
         output_tokens=int(values.get("output_tokens") or 0),
         cost_usd=float(values.get("cost_usd") or 0.0),
-        wall_seconds=time.perf_counter() - started,
+        wall_seconds=wall_seconds,
         turns=int(values.get("turns") or 0),
         model=model_name,
         raw=raw,

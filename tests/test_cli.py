@@ -58,6 +58,7 @@ def _fake_agent(target, cfg, **kwargs):  # noqa: ANN001
 
     photos = run_for_date(FixturePhotosReader.from_path(BEACH), "2026-09-17")
     labeled = label_clusters(photos.clusters)
+    interrupted = cfg.calendar.approval_mode == "review" and not kwargs.get("resume")
     return AgentResult(
         run_id="run_2026-09-17",
         target_date=date(2026, 9, 17),
@@ -87,6 +88,8 @@ def _fake_agent(target, cfg, **kwargs):  # noqa: ANN001
         raw=photos.raw,
         dropped=photos.dropped,
         clusters=photos.clusters,
+        interrupted=interrupted,
+        status="pending_review" if interrupted else "ok",
     )
 
 
@@ -255,6 +258,103 @@ def test_replay_prints_turns(isolated_home: Path) -> None:
     assert result.exit_code == 0, result.output
     assert "Turn 1" in result.stdout
     assert "expand_cluster" in result.stdout
+
+
+EXAMPLE = Path(__file__).resolve().parents[1] / "config.example.toml"
+
+
+def _write_review_config(home: Path) -> None:
+    text = EXAMPLE.read_text(encoding="utf-8").replace(
+        'approval_mode  = "auto"',
+        'approval_mode  = "review"',
+    )
+    (home / "config.toml").write_text(text, encoding="utf-8")
+
+
+def test_install_agent_writes_plist(isolated_home: Path) -> None:
+    result = runner.invoke(app, ["install-agent", "--no-load"])
+    assert result.exit_code == 0, result.output
+    assert "Wrote" in result.stdout
+    assert "07:00" in result.stdout
+    from dayframe.paths import launchd_plist_path
+
+    assert launchd_plist_path().is_file()
+
+
+def test_run_failure_records_ledger_and_log(
+    monkeypatch: pytest.MonkeyPatch, isolated_home: Path
+) -> None:
+    monkeypatch.setenv("DAYFRAME_API_KEY", "sk-test")
+    monkeypatch.setenv("DAYFRAME_PHOTOS_FIXTURE", str(BEACH))
+
+    def boom(*args, **kwargs):  # noqa: ANN001, ANN002
+        raise RuntimeError("photos exploded")
+
+    monkeypatch.setattr("dayframe.cli.run_agent", boom)
+    result = runner.invoke(app, ["run", "--date", "2026-09-17", "--no-calendar"])
+    assert result.exit_code == 1
+    assert "photos exploded" in result.output
+    log = isolated_home / "logs" / "dayframe.log"
+    assert log.is_file()
+    assert "photos exploded" in log.read_text(encoding="utf-8")
+    from dayframe.store.db import connect, fetch_run, init_db
+
+    conn = init_db(connect())
+    try:
+        row = fetch_run(conn, "run_2026-09-17")
+        assert row is not None
+        assert row["status"] == "failed"
+        assert "photos exploded" in row["error"]
+    finally:
+        conn.close()
+
+
+def test_review_mode_persists_without_calendar(
+    monkeypatch: pytest.MonkeyPatch, isolated_home: Path
+) -> None:
+    _write_review_config(isolated_home)
+    monkeypatch.setenv("DAYFRAME_API_KEY", "sk-test")
+    monkeypatch.setenv("DAYFRAME_PHOTOS_FIXTURE", str(BEACH))
+    monkeypatch.setenv("DAYFRAME_UNATTENDED", "1")
+    monkeypatch.setattr("dayframe.cli.run_agent", _fake_agent)
+    result = runner.invoke(app, ["run", "--date", "2026-09-17"])
+    assert result.exit_code == 0, result.output
+    assert "pending_review" in result.stdout
+    assert "unattended" in result.stdout
+    assert not (isolated_home / "out" / "run_2026-09-17.ics").exists()
+    from dayframe.store.db import connect, fetch_run, init_db
+
+    conn = init_db(connect())
+    try:
+        row = fetch_run(conn, "run_2026-09-17")
+        assert row is not None
+        assert row["status"] == "pending_review"
+        assert conn.execute("SELECT COUNT(*) AS n FROM memories").fetchone()["n"] == 1
+    finally:
+        conn.close()
+
+
+def test_review_mode_approve_writes_calendar(
+    monkeypatch: pytest.MonkeyPatch, isolated_home: Path
+) -> None:
+    _write_review_config(isolated_home)
+    monkeypatch.setenv("DAYFRAME_API_KEY", "sk-test")
+    monkeypatch.setenv("DAYFRAME_PHOTOS_FIXTURE", str(BEACH))
+    monkeypatch.setattr("dayframe.cli.run_agent", _fake_agent)
+    result = runner.invoke(app, ["run", "--date", "2026-09-17"], input="y\n")
+    assert result.exit_code == 0, result.output
+    assert "Write 1 memory to the calendar?" in result.output
+    ics = isolated_home / "out" / "run_2026-09-17.ics"
+    assert ics.is_file()
+    from dayframe.store.db import connect, fetch_run, init_db
+
+    conn = init_db(connect())
+    try:
+        row = fetch_run(conn, "run_2026-09-17")
+        assert row is not None
+        assert row["status"] == "ok"
+    finally:
+        conn.close()
 
 
 def test_photos_list_from_fixture(monkeypatch: pytest.MonkeyPatch) -> None:

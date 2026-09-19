@@ -16,7 +16,9 @@ from dayframe.calendar.auth import run_auth
 from dayframe.calendar.events import CalendarError
 from dayframe.calendar.write import publish_memories, undo_run
 from dayframe.doctor import failed, format_report, run_checks
-from dayframe.paths import api_key, load_env
+from dayframe.failures import log_failure
+from dayframe.launchd import install_agent as write_launch_agent
+from dayframe.paths import LAUNCHD_LABEL, api_key, home, is_unattended, load_env
 from dayframe.photos.models import Asset
 from dayframe.photos.reader import get_reader
 from dayframe.pipeline import PipelineResult, load_config_optional, run_for_date
@@ -26,6 +28,7 @@ from dayframe.store.db import (
     fetch_run,
     init_db,
     persist_baseline_run,
+    record_failed_run,
     replace_inspect_run,
     seen_uuids,
     set_memory_event_id,
@@ -115,12 +118,15 @@ def run(
 
     started = datetime.now().astimezone()
     conn = init_db(connect())
+    run_id = ""
+    target_date = ""
     try:
         try:
             day = parse_target_date(date)
         except ValueError as exc:
             _die(str(exc))
         run_id = f"run_{day.isoformat()}"
+        target_date = day.isoformat()
         seen = seen_uuids(conn, exclude_run_id=run_id)
         if baseline:
             _run_baseline_cli(
@@ -135,71 +141,52 @@ def run(
             )
             return
         try:
-            result = run_agent(target=date, cfg=cfg, reader=get_reader(), seen=seen, api_key=key)
-        except (FileNotFoundError, PermissionError, RuntimeError, OSError, ValueError) as exc:
-            _die(str(exc))
-        finished = datetime.now().astimezone()
-        if result.resumed:
-            typer.echo(f"Resumed {result.run_id} from checkpoint.")
-        _print_pipeline_summary(result)
-        if not result.clusters:
-            typer.echo("Nothing to send.")
-            return
-        _print_memories(
-            result,
-            title_prefix=cfg.calendar.title_prefix,
-            images_sent=result.images_sent,
-            wall_seconds=result.wall_seconds,
-            cost_usd=result.cost_usd,
-            input_tokens=result.input_tokens,
-            output_tokens=result.output_tokens,
-            call_label=f"{result.turns} turn" if result.turns == 1 else f"{result.turns} turns",
-        )
-        if result.trace_path:
-            typer.echo(f"Trace {result.trace_path}")
-        if dry_run:
-            typer.echo("dry-run: wrote nothing")
-            return
-        if result.interrupted:
-            typer.echo("review: stopped before calendar write; nothing persisted")
-            return
-        persist_baseline_run(
-            conn,
-            run_id=result.run_id,
-            target_date=result.target_date.isoformat(),
-            started_at=started,
-            finished_at=finished,
-            labeled=result.labeled,
-            memories=result.memories,
-            discarded=result.discarded,
-            assets=result.raw,
-            provider=cfg.provider.name,
-            model=result.model,
-            prompt_version=result.prompt_version,
-            images_sent=result.images_sent,
-            input_tokens=result.input_tokens,
-            output_tokens=result.output_tokens,
-            cost_usd=result.cost_usd,
-            status=result.status,
-            turns=result.turns,
-        )
-        typer.echo(f"Wrote run {result.run_id} to the local ledger.")
-        if not no_calendar:
-            _publish_calendar(
-                conn,
-                run_id=result.run_id,
-                labeled=result.labeled,
-                memories=result.memories,
+            _run_agent_cli(
+                date=date,
+                dry_run=dry_run,
+                no_calendar=no_calendar,
+                key=key,
                 cfg=cfg,
+                conn=conn,
+                started=started,
+                seen=seen,
             )
+        except (typer.Exit, typer.Abort):
+            raise
+        except Exception as exc:
+            _fail_run(conn, run_id, target_date, started, cfg, exc)
     finally:
         conn.close()
 
 
 @app.command("install-agent")
-def install_agent() -> None:
+def install_agent(
+    load: bool = typer.Option(True, "--load/--no-load", help="Register the job with launchctl."),
+) -> None:
     """Write the launchd plist for the daily job."""
-    _not_yet("M5")
+    cfg = load_config_optional()
+    try:
+        result = write_launch_agent(cfg=cfg, load=load)
+    except OSError as exc:
+        _die(str(exc))
+    typer.echo(f"Wrote {result.plist_path}")
+    typer.echo(f"Scheduled daily at {result.hour:02d}:{result.minute:02d} local.")
+    typer.echo(f"Logs: {result.stdout_log} and {result.stderr_log}")
+    typer.echo(
+        f"Grant Full Disk Access to {result.program[0]} "
+        "(System Settings → Privacy & Security → Full Disk Access)."
+    )
+    if result.loaded:
+        typer.echo(f"Loaded {LAUNCHD_LABEL}.")
+    elif load and result.load_error:
+        typer.echo(f"warning: plist written but not loaded: {result.load_error}", err=True)
+        typer.echo(f"fix: launchctl bootstrap gui/$(id -u) {result.plist_path}", err=True)
+    env_file = home() / ".env"
+    if not env_file.is_file():
+        typer.echo(
+            f"warning: {env_file} not found; copy your .env there so launchd can read keys.",
+            err=True,
+        )
 
 
 @app.command()
@@ -266,6 +253,126 @@ def format_stored_cluster_line(seq: int, row: object) -> str:
 def _die(message: str) -> None:
     typer.echo(message, err=True)
     raise typer.Exit(code=1)
+
+
+def _fail_run(conn, run_id: str, target_date: str, started, cfg, exc: Exception) -> None:
+    path = log_failure(run_id, exc)
+    record_failed_run(
+        conn,
+        run_id=run_id,
+        target_date=target_date,
+        started_at=started,
+        finished_at=datetime.now().astimezone(),
+        error=str(exc),
+        provider=cfg.provider.name,
+        model=cfg.provider.model,
+    )
+    _die(f"{run_id} failed: {exc}\nlogged {path}")
+
+
+def _persist_agent_run(
+    conn, result: AgentResult, cfg, started, *, status: str | None = None
+) -> None:
+    persist_baseline_run(
+        conn,
+        run_id=result.run_id,
+        target_date=result.target_date.isoformat(),
+        started_at=started,
+        finished_at=datetime.now().astimezone(),
+        labeled=result.labeled,
+        memories=result.memories,
+        discarded=result.discarded,
+        assets=result.raw,
+        provider=cfg.provider.name,
+        model=result.model,
+        prompt_version=result.prompt_version,
+        images_sent=result.images_sent,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        cost_usd=result.cost_usd,
+        status=status or result.status,
+        turns=result.turns,
+    )
+    typer.echo(f"Wrote run {result.run_id} to the local ledger.")
+
+
+def _run_agent_cli(
+    *,
+    date: str,
+    dry_run: bool,
+    no_calendar: bool,
+    key: str,
+    cfg,
+    conn,
+    started,
+    seen: set[str],
+) -> None:
+    def invoke(*, resume: bool = False) -> AgentResult:
+        return run_agent(
+            target=date,
+            cfg=cfg,
+            reader=get_reader(),
+            seen=seen,
+            api_key=key,
+            resume=resume,
+        )
+
+    result = invoke()
+    if result.resumed:
+        typer.echo(f"Resumed {result.run_id} from checkpoint.")
+    _print_pipeline_summary(result)
+    if not result.clusters:
+        typer.echo("Nothing to send.")
+        return
+    _print_memories(
+        result,
+        title_prefix=cfg.calendar.title_prefix,
+        images_sent=result.images_sent,
+        wall_seconds=result.wall_seconds,
+        cost_usd=result.cost_usd,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        call_label=f"{result.turns} turn" if result.turns == 1 else f"{result.turns} turns",
+    )
+    if result.trace_path:
+        typer.echo(f"Trace {result.trace_path}")
+    if dry_run:
+        typer.echo("dry-run: wrote nothing")
+        return
+    if result.interrupted:
+        gate = bool(result.memories) and not no_calendar
+        if gate:
+            _persist_agent_run(conn, result, cfg, started, status="pending_review")
+            typer.echo("review: stopped before calendar write; saved as pending_review")
+            if is_unattended():
+                typer.echo(
+                    f"unattended: not writing the calendar; "
+                    f"re-run dayframe run --date {result.target_date.isoformat()} to approve"
+                )
+                return
+            noun = "memory" if len(result.memories) == 1 else "memories"
+            if not typer.confirm(
+                f"Write {len(result.memories)} {noun} to the calendar?",
+                default=False,
+            ):
+                typer.echo("left as pending_review")
+                return
+        result = invoke(resume=True)
+        if result.resumed:
+            typer.echo(f"Resumed {result.run_id} from checkpoint.")
+        if result.interrupted:
+            _persist_agent_run(conn, result, cfg, started, status="pending_review")
+            typer.echo("review: still waiting for approval")
+            return
+    _persist_agent_run(conn, result, cfg, started)
+    if not no_calendar:
+        _publish_calendar(
+            conn,
+            run_id=result.run_id,
+            labeled=result.labeled,
+            memories=result.memories,
+            cfg=cfg,
+        )
 
 
 def _run_baseline_cli(

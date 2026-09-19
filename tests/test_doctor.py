@@ -80,6 +80,26 @@ def test_launchd_missing() -> None:
     assert "install-agent" in check.fix
 
 
+def test_launchd_valid_plist_passes() -> None:
+    from dayframe.config import Config
+    from dayframe.launchd import install_agent
+
+    install_agent(cfg=Config(), load=False)
+    check = check_launchd()
+    assert check.ok
+
+
+def test_launchd_invalid_plist_fails(tmp_path: Path) -> None:
+    from dayframe.paths import launchd_plist_path
+
+    path = launchd_plist_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("not a plist", encoding="utf-8")
+    check = check_launchd()
+    assert not check.ok
+    assert "invalid" in check.detail
+
+
 def test_photos_library_missing_when_overridden() -> None:
     check = check_photos_library()
     assert not check.ok
